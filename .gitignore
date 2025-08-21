@@ -1,0 +1,22 @@
+# PyInstaller
+/dist/
+/build/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# IDE / Editor
+.vscode/
+gz.code-workspace
+
+# Local data and dependencies
+/poetry_db_parts/
+/poetry_knowledge_base.json
+/chinese-poetry-master/
+
+# Sensitive information
+settings.json
