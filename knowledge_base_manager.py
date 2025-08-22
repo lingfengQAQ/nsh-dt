@@ -17,7 +17,9 @@ class KnowledgeBaseManager:
         """
         self.db_parts_directory = db_parts_directory
         self.poetry_data_parts = []
+        self.char_index = {}
         self.load_data_parts()
+        self.build_index()
 
     def load_data_parts(self):
         """
@@ -50,6 +52,17 @@ class KnowledgeBaseManager:
         total_poems = sum(len(part) for part in self.poetry_data_parts)
         logging.info(f"知识库加载完成，共加载 {len(self.poetry_data_parts)} 个分片，总计 {total_poems} 条记录。")
 
+    def build_index(self):
+        logging.info("正在构建索引...")
+        for part_idx, part in enumerate(self.poetry_data_parts):
+            for poem_idx, poem in enumerate(part):
+                content = "".join(poem.get('content', []))
+                for char in set(content):
+                    if char not in self.char_index:
+                        self.char_index[char] = []
+                    self.char_index[char].append((part_idx, poem_idx))
+        logging.info("索引构建完成。")
+
     def _search_in_part(self, data_part, char_pool_counts):
         """
         在单个数据分片中搜索诗句，返回包含完整诗歌和匹配诗句的字典。
@@ -73,8 +86,12 @@ class KnowledgeBaseManager:
                     if not clean_clause or '□' in clause or len(clean_clause) < 5:
                         continue
                     
+                    is_match = True
                     clause_counts = Counter(clean_clause)
-                    is_match = all(char_pool_counts[char] >= count for char, count in clause_counts.items())
+                    for char, count in clause_counts.items():
+                        if char_pool_counts.get(char, 0) < count:
+                            is_match = False
+                            break
                     
                     if is_match:
                         matched_clauses.append(clause)
@@ -89,7 +106,7 @@ class KnowledgeBaseManager:
 
     def find_poem_from_chars(self, chars):
         """
-        使用多线程从字符池中找到匹配的诗歌。
+        使用索引从字符池中找到匹配的诗歌。
         :param chars: 包含可用汉字的字符串。
         :return: 包含 (poem_object, [matched_clauses]) 元组的列表，或 None。
         """
@@ -101,27 +118,48 @@ class KnowledgeBaseManager:
         if not char_pool_counts:
             return None
 
+        candidate_poems = set()
+        for char in char_pool_counts.keys():
+            if char in self.char_index:
+                for part_idx, poem_idx in self.char_index[char]:
+                    candidate_poems.add((part_idx, poem_idx))
+
         final_results_dict = {}
-        
-        num_threads = min(os.cpu_count() or 4, len(self.poetry_data_parts))
-        with ThreadPoolExecutor(max_workers=num_threads) as executor:
-            future_to_part = {
-                executor.submit(self._search_in_part, part, char_pool_counts): part
-                for part in self.poetry_data_parts
-            }
+        for part_idx, poem_idx in candidate_poems:
+            poem = self.poetry_data_parts[part_idx][poem_idx]
+            content_list = poem.get('content', [])
+            if isinstance(content_list, str):
+                content_list = [content_list]
+
+            matched_clauses = []
+            for line in content_list:
+                clauses = re.split(r'[，。？！,?!]', line)
+                for clause in clauses:
+                    clause = clause.strip()
+                    if not clause:
+                        continue
+
+                    clean_clause = ''.join(c for c in clause if '\u4e00' <= c <= '\u9fff')
+                    if not clean_clause or '□' in clause or len(clean_clause) < 5:
+                        continue
+                    
+                    is_match = True
+                    clause_counts = Counter(clean_clause)
+                    for char, count in clause_counts.items():
+                        if char_pool_counts.get(char, 0) < count:
+                            is_match = False
+                            break
+                    
+                    if is_match:
+                        matched_clauses.append(clause)
             
-            for future in as_completed(future_to_part):
-                try:
-                    part_results_dict = future.result()
-                    for key, (poem, clauses) in part_results_dict.items():
-                        if key not in final_results_dict:
-                            final_results_dict[key] = (poem, [])
-                        final_results_dict[key][1].extend(clauses)
-                except Exception as exc:
-                    logging.error(f'一个搜索线程产生异常: {exc}')
+            if matched_clauses:
+                key = (poem.get('title', '无题'), poem.get('author', '佚名'))
+                if key not in final_results_dict:
+                    final_results_dict[key] = (poem, [])
+                final_results_dict[key][1].extend(matched_clauses)
 
         if not final_results_dict:
             return None
         
-        # 返回 (poem, [matched_clauses]) 的列表
         return list(final_results_dict.values())

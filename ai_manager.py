@@ -21,6 +21,12 @@ class AIManager:
         # AI配置字典，格式：{name: config_dict}
         self.ai_configs = {}
         self.system_prompt = self.DEFAULT_PROMPT
+        self.vision_models = [
+            "gpt-4-vision-preview", "gpt-4v", "gpt-4-v", "gpt-4o",
+            "glm-4v",
+            "qwen-vl-plus", "qwen-vl-max",
+            "claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307",
+        ]
         
     def load_settings(self, settings):
         """
@@ -104,17 +110,12 @@ class AIManager:
         :return: AI回答
         """
         ai_type = config.get("type", "openai").lower()
+        model = config.get("model")
 
-        # 对于兼容OpenAI的API，统一处理
-        # 支持 "openai", "doubao", "siliconflow" 等
-        if ai_type in ["openai", "doubao", "siliconflow", "custom"]:
+        if image and model in self.vision_models:
             return self._get_openai_compatible_answer(config, question_text, image)
-        # 在这里可以为其他AI类型（如claude, gemini）添加分支
-        # elif ai_type == "claude":
-        #     return self._get_claude_answer(config, question_text, image)
         else:
-            # 默认使用OpenAI兼容模式，以支持用户自定义类型
-            return self._get_openai_compatible_answer(config, question_text, image)
+            return self._get_openai_compatible_answer(config, question_text)
 
     def _get_openai_compatible_answer(self, config, question_text, image=None):
         """获取与OpenAI API兼容的服务的回答"""
@@ -141,17 +142,10 @@ class AIManager:
             messages = [
                 {"role": "system", "content": self.system_prompt},
             ]
-
-            # 定义支持视觉的模型列表
-            vision_models = [
-                "gpt-4-vision-preview", "gpt-4v", "gpt-4-v", "gpt-4o",
-                "glm-4v",  # 智谱
-                "qwen-vl-plus", "qwen-vl-max", # 通义千问
-                "claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307", # Claude 3也支持
-            ]
+            logging.info(f"Sending to AI: {messages}")
 
             # 如果有图片且模型支持视觉
-            if image and model in vision_models:
+            if image and model in self.vision_models:
                 try:
                     # 将图片转换为base64
                     buffered = BytesIO()
@@ -184,47 +178,14 @@ class AIManager:
             # 发送请求
             try:
                 # 调整API参数
-                completion = client.chat.completions.create(
+                stream = client.chat.completions.create(
                     model=model,
                     messages=messages,
                     max_tokens=min(int(config.get("max_tokens", 1000)), 4000),
-                    temperature=float(config.get("temperature", 0.7))
+                    temperature=float(config.get("temperature", 0.7)),
+                    stream=True
                 )
-                
-                # 确保响应有效
-                if not completion or not hasattr(completion, 'choices') or not completion.choices:
-                    raise ValueError("无效的API响应格式")
-                
-                # 获取第一个选择
-                first_choice = completion.choices[0]
-                if not first_choice or not hasattr(first_choice, 'message'):
-                    raise ValueError("无效的API响应消息格式")
-                
-                # 获取消息内容
-                message = first_choice.message
-                if not message or not hasattr(message, 'content'):
-                    raise ValueError("无效的消息内容格式")
-                
-                # 尝试从多个可能的属性获取回答内容
-                answer = getattr(message, 'content', None)
-                
-                # 如果 content 为空，尝试从 text 属性获取
-                if not answer:
-                    answer = getattr(message, 'text', None)
-
-                # 如果还是空，尝试从 annotations 获取
-                if not answer:
-                    annotations = getattr(message, 'annotations', None)
-                    if annotations and isinstance(annotations, list) and len(annotations) > 0:
-                        # 简单地将所有 annotation 连接起来
-                        answer = " ".join(str(a) for a in annotations)
-
-                # 如果仍然没有找到回答，则记录日志并抛出错误
-                if not answer:
-                    logging.error(f"无法提取回答。完整的API响应: {completion}")
-                    raise ValueError("API返回的回答内容为空或格式不兼容")
-                    
-                return answer
+                return stream
                 
             except (AttributeError, IndexError) as e:
                 raise ValueError(f"API响应格式错误: {str(e)}")

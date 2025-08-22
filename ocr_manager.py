@@ -6,19 +6,21 @@ import base64
 import json
 from io import BytesIO
 import time
+import logging
 
 class OCRManager:
     def __init__(self):
         self.settings = {
-            "type": "tesseract", # 默认使用tesseract, 可以是 "tesseract" 或 "baidu"
-            "tesseract_path": "",  # Tesseract-OCR安装路径
-            "language": "chi_sim+eng", # 默认识别语言
+            "type": "tesseract", #可以是 "tesseract", "baidu"
+            "tesseract_path": "",
+            "language": "chi_sim+eng",
             "baidu_api_key": "",
             "baidu_secret_key": ""
         }
-        self.load_settings({}) # 初始加载空设置，等待从文件加载
+        self.load_settings({})
         self.baidu_access_token = None
         self.baidu_token_expire_time = 0
+        self.preload_ocr_engine()
         
     def load_settings(self, settings):
         """加载OCR设置"""
@@ -52,6 +54,14 @@ class OCRManager:
         else:
             raise ValueError(f"不支持的OCR类型: {ocr_type}")
             
+    def preload_ocr_engine(self):
+        ocr_type = self.settings.get("type")
+        if ocr_type == "tesseract":
+            try:
+                pytesseract.image_to_string(Image.new('RGB', (1, 1)), lang=self.settings.get("language"))
+            except Exception:
+                pass
+    
     def _extract_text_tesseract(self, image: Image.Image) -> str:
         """
         使用Tesseract从图片中提取文字
@@ -60,16 +70,19 @@ class OCRManager:
             raise ValueError("Tesseract-OCR路径未配置，请在设置中配置。")
             
         try:
+            start_time = time.time()
             text = pytesseract.image_to_string(image, lang=self.settings.get("language"))
+            end_time = time.time()
+            logging.info(f"Tesseract OCR took {end_time - start_time:.2f} seconds")
             return text
         except pytesseract.TesseractNotFoundError:
             raise pytesseract.TesseractNotFoundError("Tesseract-OCR未找到，请检查路径配置。")
         except Exception as e:
             raise Exception(f"Tesseract OCR识别失败: {str(e)}")
             
-    def _get_baidu_access_token(self):
+    def _get_baidu_access_token(self, retries=3, delay=1):
         """
-        获取百度云OCR的Access Token
+        获取百度云OCR的Access Token，带重试逻辑
         """
         if self.baidu_access_token and self.baidu_token_expire_time > time.time():
             return self.baidu_access_token
@@ -82,24 +95,29 @@ class OCRManager:
             
         url = f"https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id={api_key}&client_secret={secret_key}"
         
-        try:
-            response = requests.post(url, timeout=10)
-            response.raise_for_status()
-            result = response.json()
-            
-            if "access_token" in result:
-                self.baidu_access_token = result["access_token"]
-                self.baidu_token_expire_time = time.time() + result.get("expires_in", 0) - 300 # 提前5分钟过期
-                return self.baidu_access_token
-            else:
-                raise Exception(f"获取百度云Access Token失败: {result.get('error_description', result)}")
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"请求百度云Access Token失败: {str(e)}")
+        for i in range(retries):
+            try:
+                response = requests.post(url, timeout=10)
+                response.raise_for_status()
+                result = response.json()
+                
+                if "access_token" in result:
+                    self.baidu_access_token = result["access_token"]
+                    self.baidu_token_expire_time = time.time() + result.get("expires_in", 0) - 300 # 提前5分钟过期
+                    return self.baidu_access_token
+                else:
+                    raise Exception(f"获取百度云Access Token失败: {result.get('error_description', result)}")
+            except requests.exceptions.RequestException as e:
+                if i < retries - 1:
+                    time.sleep(delay)
+                else:
+                    raise Exception(f"请求百度云Access Token失败: {str(e)}")
             
     def _extract_text_baidu(self, image: Image.Image) -> str:
         """
         使用百度云OCR从图片中提取文字
         """
+        start_time = time.time()
         access_token = self._get_baidu_access_token()
         
         # 将PIL Image转换为base64
@@ -126,6 +144,8 @@ class OCRManager:
             
             if "words_result" in result:
                 text_lines = [item["words"] for item in result["words_result"]]
+                end_time = time.time()
+                logging.info(f"Baidu OCR took {end_time - start_time:.2f} seconds")
                 return "\n".join(text_lines)
             elif "error_code" in result:
                 raise Exception(f"百度云OCR识别错误: {result.get('error_msg', '未知错误')} (错误码: {result.get('error_code')})")
