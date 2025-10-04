@@ -340,8 +340,14 @@ class QuestionAssistant(ctk.CTk):
         try:
             raw_text = self.ocr_manager.extract_text(image)
             question_text = self._format_question_text(raw_text)
+
+            # 记录识别到的题目
+            logging.info(f"=" * 60)
+            logging.info(f"OCR识别结果: {question_text}")
+
             if not question_text.strip():
                 self.after(0, lambda: self.status_var.set("未识别到文字"))
+                logging.warning("OCR未识别到任何文字")
                 question_text = ""
             self.after(0, lambda: self.update_question_text(question_text))
             self.after(0, self.clear_ai_answers)
@@ -369,12 +375,20 @@ class QuestionAssistant(ctk.CTk):
         self.clear_ai_answers()
 
         if is_poem_task and hasattr(self, "local_results_frame"):
+            import re
             chars_to_find = question_text
-            for phrase in ["请从以下字中选出一句诗词", "请从下列字中选出一句诗词", "从以下字中选出一句诗词",
-                          "从下列字中选出一句诗词", "用这些字组成一句诗", "用下面的字组成诗句", "这些字能组成什么诗句"]:
-                if phrase in question_text:
-                    chars_to_find = question_text.replace(phrase, "").strip()
-                    break
+
+            # 找到"诗词"的位置，提取其后的内容
+            if "诗词" in question_text:
+                idx = question_text.find("诗词")
+                chars_to_find = question_text[idx + 2:].strip()  # +2跳过"诗词"两个字
+
+            # 去除尾部的按钮文字（确定、取消等）
+            chars_to_find = re.sub(r'(确定|取消|选择|提交|重置).*$', '', chars_to_find)
+            chars_to_find = chars_to_find.strip()
+
+            logging.info(f"本地知识库 - 提取字符: {chars_to_find}")
+
             self.local_results_frame.configure(state="normal")
             self.local_results_frame.delete("1.0", "end")
             self.local_results_frame.insert("end", "正在匹配本地诗词...\n")
@@ -468,13 +482,22 @@ class QuestionAssistant(ctk.CTk):
         try:
             # This will block until the background loading is complete
             results = self.kb_manager.find_poem_from_chars(chars)
-            
+
+            # 记录本地知识库结果
+            if results:
+                poems_info = []
+                for poem, matched_clauses in results:
+                    poems_info.append(f"《{poem.get('title', '未知')}》- {poem.get('author', '未知')}: {matched_clauses}")
+                logging.info(f"本地知识库 - 找到结果: {'; '.join(poems_info)}")
+            else:
+                logging.info(f"本地知识库 - 未找到匹配")
+
             # Clear the widget (either the loading message or old results) before showing new results
             self.after(0, widget.delete, "1.0", "end")
             self.after(0, self._update_poem_widget, widget, results)
         except Exception as e:
             error_msg = f"本地搜索出错: {str(e)}"
-            logging.error(f"Error finding poem locally: {e}", exc_info=True)
+            logging.error(f"本地知识库错误: {e}", exc_info=True)
             self.after(0, widget.delete, "1.0", "end")
             self.after(0, widget.insert, "end", error_msg)
 
@@ -532,6 +555,7 @@ class QuestionAssistant(ctk.CTk):
 
     def _get_single_ai_answer(self, ai_name, config, question_text, image, widget):
         try:
+            logging.info(f"AI({ai_name}) - 开始请求")
             stream = self.ai_manager.get_answer(ai_name, config, question_text, image)
             buffer = []
             for chunk in stream:
@@ -544,6 +568,16 @@ class QuestionAssistant(ctk.CTk):
                     preview = "".join(buffer)
                     if preview.strip():
                         self.after(0, lambda text=preview: self._update_highlight_preview(ai_name, text))
+
+            # 记录完整的AI回答
+            full_answer = "".join(buffer)
+            if full_answer.strip():
+                # 限制日志长度，只记录前500字符
+                log_answer = full_answer[:500] + "..." if len(full_answer) > 500 else full_answer
+                logging.info(f"AI({ai_name}) - 回答: {log_answer}")
+            else:
+                logging.warning(f"AI({ai_name}) - 回答为空")
+
             self.after(100, lambda w=widget: self._adjust_widget_height(w))
             self.after(0, lambda: self.header_status_label.configure(text="完成"))
             if not self.highlight_populated:
@@ -552,7 +586,7 @@ class QuestionAssistant(ctk.CTk):
                     self.after(0, lambda text=joined: self._update_highlight_preview(ai_name, text))
         except Exception as e:
             error_msg = f"获取{ai_name}回答时出错: {str(e)}"
-            logging.error(f"Error getting answer from {ai_name}: {e}", exc_info=True)
+            logging.error(f"AI({ai_name})错误: {e}", exc_info=True)
             self.after(0, widget.insert, "end", error_msg)
             self.after(0, lambda: self.header_status_label.configure(text="服务异常"))
 
@@ -668,8 +702,26 @@ class QuestionAssistant(ctk.CTk):
             logging.warning(f"更新字体失败: {e}")
 
     def setup_logging(self):
-        logging.basicConfig(filename=APP_CONFIG['LOG_FILENAME'], level=logging.INFO,
-                            format='%(asctime)s - %(levelname)s - %(message)s')
+        # 清除已有的handlers，确保配置生效
+        logger = logging.getLogger()
+        logger.handlers.clear()
+        logger.setLevel(logging.INFO)
+
+        # 配置日志：同时输出到文件和控制台
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+        # 文件处理器
+        file_handler = logging.FileHandler(APP_CONFIG['LOG_FILENAME'], encoding='utf-8', mode='a')
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+
+        # 控制台处理器
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+
+        logging.info("=" * 60)
+        logging.info("应用启动")
 
     def run(self):
         self.mainloop()

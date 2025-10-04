@@ -9,6 +9,17 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 def get_resource_path(relative_path):
     """获取资源文件的绝对路径（兼容打包后的环境）"""
+    # 对于poetry.db这样的大文件，总是从exe所在目录加载
+    if relative_path == 'poetry.db':
+        if getattr(sys, 'frozen', False):
+            # 打包后：exe所在目录
+            exe_dir = os.path.dirname(sys.executable)
+            return os.path.join(exe_dir, relative_path)
+        else:
+            # 开发环境：当前工作目录
+            return os.path.join(os.path.abspath("."), relative_path)
+
+    # 其他资源文件使用_MEIPASS
     if hasattr(sys, '_MEIPASS'):
         # PyInstaller 打包后的临时目录
         return os.path.join(sys._MEIPASS, relative_path)
