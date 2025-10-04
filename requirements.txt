@@ -1,0 +1,11 @@
+pillow>=10.0.0
+opencv-python>=4.8.0
+pytesseract>=0.3.10
+requests>=2.31.0
+tkinter-tooltip>=2.1.0
+pystray>=0.19.4
+keyboard>=0.13.5
+numpy>=1.24.0
+openai>=1.12.0
+tiktoken>=0.6.0
+customtkinter>=5.2.2
