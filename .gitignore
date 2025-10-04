@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# 数据库文件(太大)
+poetry.db
+
+# Archive归档目录(太大)
+archive/
+
+# 测试和临时文件
+*.log
+*.tmp
+test_*.json
+poem_*.txt
+poem*.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 构建文件
+build/
+dist/
+*.egg-info/
+
+# 配置文件(包含密钥)
+settings.json
